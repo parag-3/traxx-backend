@@ -17,6 +17,7 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-npm-debug.log*
+# Database
+*.db
+*.db-journal
+dev.db

@@ -1,0 +1,105 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// USER MODEL
+// ----------------------------------------------------
+model User {
+  id        String     @id @default(uuid())
+  googleId  String?    @unique
+  email     String     @unique
+  name      String
+  picture   String?
+  habits    Habit[]
+  logs      HabitLog[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+// ----------------------------------------------------
+// HABIT MODEL
+// ----------------------------------------------------
+model Habit {
+  id              String               @id @default(uuid())
+  userId          String
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title           String
+  description     String?
+  category        String?              // e.g. "Fitness", "Learning", "Mindfulness"
+  color           String               @default("#6366F1") // Primary badge/theme color
+  icon            String               @default("CheckCircle")
+  type            String               // "NUMERICAL" or "STATUS"
+  
+  // Numerical Habit Properties (Nullable for STATUS type)
+  unit            String?              // Mandatory if type == "NUMERICAL" (e.g. "pages", "km", "ml", "mins")
+  targetValue     Float?               // Daily target goal (e.g. 30 for 30 pages)
+  aggregationType String?              @default("SUM") // "SUM", "AVERAGE", "MAX", "MIN"
+  
+  // Status/Enum Habit Options (Relational list of custom states with colors)
+  statusOptions   HabitStatusOption[]
+  
+  // Streak & Milestone Tracking (Stored directly for fast dashboard queries)
+  currentStreak      Int               @default(0)
+  bestStreak         Int               @default(0)
+  lastCompletedDate  String?           // YYYY-MM-DD of the most recent completed day
+  
+  archived        Boolean              @default(false)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  logs            HabitLog[]
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------
+// CUSTOM ENUM / STATUS OPTIONS
+// ----------------------------------------------------
+model HabitStatusOption {
+  id          String   @id @default(uuid())
+  habitId     String
+  habit       Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  
+  label       String   // e.g. "Completed", "In Progress", "Skipped"
+  value       String   // e.g. "COMPLETED", "IN_PROGRESS", "SKIPPED"
+  color       String   // Custom Hex code e.g. "#10B981", "#3B82F6", "#EF4444"
+  order       Int      @default(0) // Sequence order for cycling/dropdown
+  isCompleted Boolean  @default(false) // Does this state count as habit achieved?
+
+  @@unique([habitId, value])
+  @@index([habitId])
+}
+
+// ----------------------------------------------------
+// DAILY HABIT LOGS (ONE ENTRY PER HABIT PER DAY)
+// ----------------------------------------------------
+model HabitLog {
+  id           String    @id @default(uuid())
+  habitId      String
+  habit        Habit     @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date         String    // YYYY-MM-DD (e.g. "2026-08-27")
+  
+  // Values recorded for that day
+  numericValue Float?    // Recorded number if Numerical (e.g. 25.5 pages)
+  statusValue  String?   // Value of chosen status if Enum (e.g. "COMPLETED")
+  
+  // Auto-calculated flag based on targetValue or statusOption.isCompleted
+  isCompleted  Boolean   @default(false)
+  notes        String?   // Optional daily reflection note
+  
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([habitId, date]) // Ensures exactly 1 log per habit per calendar day
+  @@index([userId, date])
+}
