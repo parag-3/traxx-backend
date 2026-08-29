@@ -18,6 +18,7 @@ model User {
   picture   String?
   habits    Habit[]
   logs      HabitLog[]
+  tasks     Task[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 }
@@ -44,6 +45,15 @@ model Habit {
   
   // Status/Enum Habit Options (Relational list of custom states with colors)
   statusOptions   HabitStatusOption[]
+  
+  // Frequency & Schedule Configuration
+  frequencyType   String               @default("DAILY") // "DAILY", "WEEKDAYS", "WEEKENDS", "CUSTOM_DAYS", "TIMES_PER_WEEK"
+  frequencyDays   String?              // e.g. "MON,TUE,WED,THU,FRI"
+  frequencyTarget Int?                 // e.g. 3 for 3x per week
+
+  // Reminder Configuration
+  reminderEnabled Boolean              @default(false)
+  reminderTime    String?              // e.g. "08:30" (24-hour format)
   
   // Streak & Milestone Tracking (Stored directly for fast dashboard queries)
   currentStreak      Int               @default(0)
@@ -101,5 +111,28 @@ model HabitLog {
   updatedAt    DateTime  @updatedAt
 
   @@unique([habitId, date]) // Ensures exactly 1 log per habit per calendar day
+  @@index([userId, date])
+}
+
+// ----------------------------------------------------
+// AD-HOC DAILY TO-DO TASKS
+// ----------------------------------------------------
+model Task {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title        String
+  description  String?
+  date         String    // YYYY-MM-DD
+  isCompleted  Boolean   @default(false)
+  priority     String    @default("MEDIUM") // "LOW", "MEDIUM", "HIGH"
+  category     String?   // e.g. "Work", "Personal", "Errands"
+  time         String?   // e.g. "14:30"
+  reminderTime String?   // e.g. "14:15"
+  
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
   @@index([userId, date])
 }
