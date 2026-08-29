@@ -1090,6 +1090,94 @@ app.get('/api/daily-plan', requireAuth, async (req: AuthRequest, res: Response):
 });
 
 // ----------------------------------------------------
+// WEEKLY COMPLETION HEATMAP STATS
+// ----------------------------------------------------
+app.get('/api/daily-plan/week-stats', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const startDate = typeof req.query['startDate'] === 'string' ? req.query['startDate'] : getTodayIso();
+    const endDate = typeof req.query['endDate'] === 'string' ? req.query['endDate'] : startDate;
+
+    // Fetch all active habits with logs in this date range
+    const habits = await prisma.habit.findMany({
+      where: { userId, archived: false },
+      include: {
+        logs: {
+          where: {
+            date: {
+              gte: startDate,
+              lte: endDate,
+            },
+          },
+        },
+      },
+    });
+
+    // Fetch all tasks in this date range
+    const tasks = await prisma.task.findMany({
+      where: {
+        userId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+    });
+
+    // Generate list of dates between startDate and endDate
+    const startParts = startDate.split('-').map(Number);
+    const endParts = endDate.split('-').map(Number);
+    const cur = new Date(Date.UTC(startParts[0] ?? 1970, (startParts[1] ?? 1) - 1, startParts[2] ?? 1));
+    const end = new Date(Date.UTC(endParts[0] ?? 1970, (endParts[1] ?? 1) - 1, endParts[2] ?? 1));
+
+    const statsMap: Record<string, { totalCount: number; completedCount: number; percentage: number }> = {};
+
+    while (cur <= end) {
+      const dateStr = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, '0')}-${String(cur.getUTCDate()).padStart(2, '0')}`;
+
+      // Habits scheduled or logged on dateStr
+      let habitsScheduled = 0;
+      let habitsCompleted = 0;
+
+      for (const habit of habits) {
+        const isScheduled = isDateScheduled(dateStr, habit.frequencyType, habit.frequencyDays);
+        const log = habit.logs.find((l) => l.date === dateStr);
+        if (isScheduled || log) {
+          habitsScheduled++;
+          if (log?.isCompleted) {
+            habitsCompleted++;
+          }
+        }
+      }
+
+      // Tasks on dateStr
+      const dayTasks = tasks.filter((t) => t.date === dateStr);
+      const tasksTotal = dayTasks.length;
+      const tasksCompleted = dayTasks.filter((t) => t.isCompleted).length;
+
+      const totalCount = habitsScheduled + tasksTotal;
+      const completedCount = habitsCompleted + tasksCompleted;
+      const percentage = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+      statsMap[dateStr] = {
+        totalCount,
+        completedCount,
+        percentage,
+      };
+
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+
+    return res.status(200).json({ stats: statsMap });
+  } catch (error) {
+    console.error('[API] Week Stats Error:', error);
+    return res.status(500).json({ error: 'Failed to fetch week stats' });
+  }
+});
+
+// ----------------------------------------------------
 // REMINDERS FOR TODAY
 // ----------------------------------------------------
 app.get('/api/reminders/today', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
