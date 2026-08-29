@@ -131,6 +131,7 @@ model Task {
   category     String?   // e.g. "Work", "Personal", "Errands"
   time         String?   // e.g. "14:30"
   reminderTime String?   // e.g. "14:15"
+  timeSpent    Int?      @default(0) // Minutes spent on this task
   
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

@@ -313,7 +313,14 @@ app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pr
       }
     }
 
+    if (type === 'TIME') {
+      if (targetValue === undefined || targetValue === null || isNaN(parseFloat(targetValue))) {
+        return res.status(400).json({ error: 'Time-based habits must have a target duration in minutes' });
+      }
+    }
+
     const effectiveStartDate = String(startDate || getTodayIso());
+    const isNumericOrTime = type === 'NUMERICAL' || type === 'TIME';
 
     const newHabit = await prisma.habit.create({
       data: {
@@ -324,9 +331,9 @@ app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pr
         color: String(color),
         icon: String(icon),
         type: String(type),
-        unit: type === 'NUMERICAL' && unit ? String(unit) : null,
-        targetValue: type === 'NUMERICAL' && targetValue !== undefined ? parseFloat(targetValue) : null,
-        aggregationType: type === 'NUMERICAL' && aggregationType ? String(aggregationType) : null,
+        unit: isNumericOrTime ? (unit ? String(unit) : (type === 'TIME' ? 'mins' : null)) : null,
+        targetValue: isNumericOrTime && targetValue !== undefined ? parseFloat(targetValue) : null,
+        aggregationType: isNumericOrTime ? (aggregationType ? String(aggregationType) : 'SUM') : null,
         startDate: effectiveStartDate,
         frequencyType: String(frequencyType),
         frequencyDays: frequencyDays ? String(frequencyDays) : null,
@@ -423,6 +430,8 @@ app.put('/api/habits/:id', requireAuth, async (req: AuthRequest, res: Response):
       return res.status(404).json({ error: 'Habit not found' });
     }
 
+    const isNumericOrTime = existing.type === 'NUMERICAL' || existing.type === 'TIME';
+
     const updatedHabit = await prisma.$transaction(async (tx) => {
       if (existing.type === 'STATUS' && Array.isArray(statusOptions)) {
         await tx.habitStatusOption.deleteMany({ where: { habitId: id } });
@@ -447,9 +456,9 @@ app.put('/api/habits/:id', requireAuth, async (req: AuthRequest, res: Response):
           color: color !== undefined ? String(color) : existing.color,
           icon: icon !== undefined ? String(icon) : existing.icon,
           startDate: startDate !== undefined ? String(startDate) : existing.startDate,
-          unit: existing.type === 'NUMERICAL' ? (unit !== undefined ? (unit ? String(unit) : null) : existing.unit) : null,
-          targetValue: existing.type === 'NUMERICAL' && targetValue !== undefined ? parseFloat(targetValue) : existing.targetValue,
-          aggregationType: existing.type === 'NUMERICAL' ? (aggregationType !== undefined ? (aggregationType ? String(aggregationType) : null) : existing.aggregationType) : null,
+          unit: isNumericOrTime ? (unit !== undefined ? (unit ? String(unit) : (existing.type === 'TIME' ? 'mins' : null)) : existing.unit) : null,
+          targetValue: isNumericOrTime && targetValue !== undefined ? parseFloat(targetValue) : existing.targetValue,
+          aggregationType: isNumericOrTime ? (aggregationType !== undefined ? (aggregationType ? String(aggregationType) : 'SUM') : existing.aggregationType) : null,
           frequencyType: frequencyType !== undefined ? String(frequencyType) : existing.frequencyType,
           frequencyDays: frequencyDays !== undefined ? (frequencyDays ? String(frequencyDays) : null) : existing.frequencyDays,
           frequencyTarget: frequencyTarget !== undefined ? (frequencyTarget ? parseInt(frequencyTarget, 10) : null) : existing.frequencyTarget,
@@ -507,7 +516,7 @@ app.post('/api/habits/:id/log', requireAuth, async (req: AuthRequest, res: Respo
     const id = getParamStr(req.params['id']);
     if (!id) return res.status(400).json({ error: 'Habit ID required' });
 
-    const { date = getTodayIso(), numericValue, statusValue, notes, clear } = req.body;
+    const { date = getTodayIso(), numericValue, statusValue, notes, clear, addMinutes } = req.body;
 
     const habit = await prisma.habit.findFirst({
       where: { id, userId },
@@ -534,8 +543,20 @@ app.post('/api/habits/:id/log', requireAuth, async (req: AuthRequest, res: Respo
       let finalNumeric: number | null = null;
       let finalStatus: string | null = null;
 
-      if (habit.type === 'NUMERICAL') {
-        if (numericValue !== undefined && numericValue !== null && numericValue !== '') {
+      if (habit.type === 'NUMERICAL' || habit.type === 'TIME') {
+        if (addMinutes !== undefined && addMinutes !== null && !isNaN(parseFloat(addMinutes))) {
+          // Live timer increment: Add minutes to existing log for this date
+          const existingLog = await prisma.habitLog.findUnique({
+            where: {
+              habitId_date: {
+                habitId: id,
+                date: String(date),
+              },
+            },
+          });
+          finalNumeric = (existingLog?.numericValue ?? 0) + parseFloat(addMinutes);
+          isCompleted = habit.targetValue !== null ? finalNumeric >= habit.targetValue : finalNumeric > 0;
+        } else if (numericValue !== undefined && numericValue !== null && numericValue !== '') {
           finalNumeric = parseFloat(numericValue);
           isCompleted = habit.targetValue !== null ? finalNumeric >= habit.targetValue : finalNumeric > 0;
         }
@@ -894,7 +915,7 @@ app.post('/api/tasks', requireAuth, async (req: AuthRequest, res: Response): Pro
   }
 });
 
-// Update Task (Toggle complete, update title/date/priority/time)
+// Update Task (Toggle complete, update title/date/priority/time/timeSpent)
 app.put('/api/tasks/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
   try {
     const userId = req.user?.userId;
@@ -912,6 +933,8 @@ app.put('/api/tasks/:id', requireAuth, async (req: AuthRequest, res: Response): 
       category,
       time,
       reminderTime,
+      timeSpent,
+      addMinutes,
     } = req.body;
 
     const existing = await prisma.task.findFirst({
@@ -920,6 +943,13 @@ app.put('/api/tasks/:id', requireAuth, async (req: AuthRequest, res: Response): 
 
     if (!existing) {
       return res.status(404).json({ error: 'Task not found' });
+    }
+
+    let finalTimeSpent = existing.timeSpent ?? 0;
+    if (addMinutes !== undefined && !isNaN(parseInt(addMinutes, 10))) {
+      finalTimeSpent += parseInt(addMinutes, 10);
+    } else if (timeSpent !== undefined && !isNaN(parseInt(timeSpent, 10))) {
+      finalTimeSpent = parseInt(timeSpent, 10);
     }
 
     const updatedTask = await prisma.task.update({
@@ -933,6 +963,7 @@ app.put('/api/tasks/:id', requireAuth, async (req: AuthRequest, res: Response): 
         category: category !== undefined ? (category ? String(category) : null) : existing.category,
         time: time !== undefined ? (time ? String(time) : null) : existing.time,
         reminderTime: reminderTime !== undefined ? (reminderTime ? String(reminderTime) : null) : existing.reminderTime,
+        timeSpent: finalTimeSpent,
       },
     });
 
@@ -940,6 +971,41 @@ app.put('/api/tasks/:id', requireAuth, async (req: AuthRequest, res: Response): 
   } catch (error) {
     console.error('[API] Update Task Error:', error);
     return res.status(500).json({ error: 'Failed to update task' });
+  }
+});
+
+// Log Time Spent on Task
+app.post('/api/tasks/:id/log-time', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const id = getParamStr(req.params['id']);
+    if (!id) return res.status(400).json({ error: 'Task ID required' });
+
+    const { minutes, isCompleted } = req.body;
+    const addedMinutes = parseInt(minutes, 10) || 0;
+
+    const existing = await prisma.task.findFirst({
+      where: { id, userId },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const updated = await prisma.task.update({
+      where: { id },
+      data: {
+        timeSpent: (existing.timeSpent ?? 0) + addedMinutes,
+        ...(isCompleted !== undefined ? { isCompleted: Boolean(isCompleted) } : {}),
+      },
+    });
+
+    return res.status(200).json(updated);
+  } catch (error) {
+    console.error('[API] Log Task Time Error:', error);
+    return res.status(500).json({ error: 'Failed to log task time' });
   }
 });
 
