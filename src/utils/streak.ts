@@ -1,11 +1,18 @@
 /**
  * Checks if a given YYYY-MM-DD date is an active scheduled day for a habit.
+ * Takes frequency schedule and mandatory startDate into account.
  */
 export function isDateScheduled(
   dateStr: string,
   frequencyType?: string | null,
-  frequencyDays?: string | null
+  frequencyDays?: string | null,
+  startDate?: string | null
 ): boolean {
+  // If date is strictly before the habit's startDate, it is NOT scheduled / not expected
+  if (startDate && dateStr < startDate) {
+    return false;
+  }
+
   if (!frequencyType || frequencyType === 'DAILY') {
     return true;
   }
@@ -37,13 +44,14 @@ export function isDateScheduled(
 }
 
 /**
- * Calculates current streak and best streak taking habit frequency and rest days into account.
+ * Calculates current streak and best streak taking habit frequency, rest days, and startDate into account.
  */
 export function calculateStreaks(
   completedDates: string[],
   referenceDateStr?: string,
   frequencyType?: string | null,
-  frequencyDays?: string | null
+  frequencyDays?: string | null,
+  startDate?: string | null
 ): { currentStreak: number; bestStreak: number; lastCompletedDate: string | null } {
   if (!completedDates || completedDates.length === 0) {
     return { currentStreak: 0, bestStreak: 0, lastCompletedDate: null };
@@ -77,18 +85,19 @@ export function calculateStreaks(
     return new Date(Date.UTC(y, m - 1, d));
   };
 
-  // 1. Calculate Best Streak across full history
+  // 1. Calculate Best Streak across full history starting from startDate
   let bestStreak = 0;
   if (uniqueSortedDates.length > 0) {
     const firstDateStr = uniqueSortedDates[0]!;
+    const earliestStr = startDate && startDate < firstDateStr ? startDate : firstDateStr;
     const lastDateStr = uniqueSortedDates[uniqueSortedDates.length - 1]!;
-    let walker = parseUtcDate(firstDateStr);
+    let walker = parseUtcDate(earliestStr);
     const endWalker = parseUtcDate(lastDateStr);
 
     let runningStreak = 0;
     while (walker.getTime() <= endWalker.getTime()) {
       const curStr = formatUtcDate(walker);
-      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays);
+      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays, startDate);
       const isDone = completedSet.has(curStr);
 
       if (isDone) {
@@ -121,8 +130,13 @@ export function calculateStreaks(
     // Completed today -> start counting backwards from today
     while (true) {
       const curStr = formatUtcDate(checkDate);
+      // If reached before startDate, stop walking
+      if (startDate && curStr < startDate) {
+        break;
+      }
+
       const isDone = completedSet.has(curStr);
-      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays);
+      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays, startDate);
 
       if (isDone) {
         currentStreak++;
@@ -130,10 +144,10 @@ export function calculateStreaks(
         // Encountered a scheduled day that was missed in the past -> stop
         break;
       }
-      // If not scheduled and not done -> Rest day, skip backwards
+      // If not scheduled and not done -> Rest day or day before start, skip backwards
 
       checkDate = addDays(checkDate, -1);
-      // Safety limit: Don't walk back more than 1000 days
+      // Safety limit
       if (currentStreak > 1000 || checkDate.getUTCFullYear() < 2000) break;
     }
   } else {
@@ -144,8 +158,12 @@ export function calculateStreaks(
 
     while (true) {
       const curStr = formatUtcDate(checkDate);
+      if (startDate && curStr < startDate) {
+        break;
+      }
+
       const isDone = completedSet.has(curStr);
-      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays);
+      const scheduled = isDateScheduled(curStr, frequencyType, frequencyDays, startDate);
 
       if (isDone) {
         foundFirstScheduled = true;
@@ -160,7 +178,7 @@ export function calculateStreaks(
           break;
         }
       }
-      // If rest day (not scheduled & not done) and we haven't hit a missed scheduled day, keep walking
+      // If rest day (not scheduled & not done), keep walking back
 
       checkDate = addDays(checkDate, -1);
       if (currentStreak > 1000 || checkDate.getUTCFullYear() < 2000) break;

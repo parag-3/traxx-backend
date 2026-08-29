@@ -222,12 +222,13 @@ app.get('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pro
 
     const enrichedHabits = habits.map((habit) => {
       const todayLog = habit.logs.find((l) => l.date === targetDate) || null;
-      const isScheduledToday = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays);
+      const startDate = habit.startDate || habit.createdAt.toISOString().slice(0, 10);
+      const isScheduledToday = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays, startDate);
 
       // Map past 7 days logs
       const history7Days = past7Days.map((dateStr) => {
         const log = habit.logs.find((l) => l.date === dateStr);
-        const scheduled = isDateScheduled(dateStr, habit.frequencyType, habit.frequencyDays);
+        const scheduled = isDateScheduled(dateStr, habit.frequencyType, habit.frequencyDays, startDate);
         let color: string | null = null;
         if (log && habit.type === 'STATUS' && log.statusValue) {
           const opt = habit.statusOptions.find((o) => o.value === log.statusValue);
@@ -254,6 +255,7 @@ app.get('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pro
         unit: habit.unit,
         targetValue: habit.targetValue,
         aggregationType: habit.aggregationType,
+        startDate,
         frequencyType: habit.frequencyType,
         frequencyDays: habit.frequencyDays,
         frequencyTarget: habit.frequencyTarget,
@@ -276,7 +278,7 @@ app.get('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pro
   }
 });
 
-// Create a new Habit (with Frequency & Reminders)
+// Create a new Habit (with Start Date, Frequency & Reminders)
 app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
   try {
     const userId = req.user?.userId;
@@ -289,6 +291,7 @@ app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pr
       color = '#6366F1',
       icon = 'CheckCircle',
       type,
+      startDate = getTodayIso(),
       unit,
       targetValue,
       aggregationType = 'SUM',
@@ -310,6 +313,8 @@ app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pr
       }
     }
 
+    const effectiveStartDate = String(startDate || getTodayIso());
+
     const newHabit = await prisma.habit.create({
       data: {
         userId,
@@ -322,6 +327,7 @@ app.post('/api/habits', requireAuth, async (req: AuthRequest, res: Response): Pr
         unit: type === 'NUMERICAL' && unit ? String(unit) : null,
         targetValue: type === 'NUMERICAL' && targetValue !== undefined ? parseFloat(targetValue) : null,
         aggregationType: type === 'NUMERICAL' && aggregationType ? String(aggregationType) : null,
+        startDate: effectiveStartDate,
         frequencyType: String(frequencyType),
         frequencyDays: frequencyDays ? String(frequencyDays) : null,
         frequencyTarget: frequencyTarget ? parseInt(frequencyTarget, 10) : null,
@@ -397,6 +403,7 @@ app.put('/api/habits/:id', requireAuth, async (req: AuthRequest, res: Response):
       category,
       color,
       icon,
+      startDate,
       unit,
       targetValue,
       aggregationType,
@@ -439,6 +446,7 @@ app.put('/api/habits/:id', requireAuth, async (req: AuthRequest, res: Response):
           category: category !== undefined ? (category ? String(category) : null) : existing.category,
           color: color !== undefined ? String(color) : existing.color,
           icon: icon !== undefined ? String(icon) : existing.icon,
+          startDate: startDate !== undefined ? String(startDate) : existing.startDate,
           unit: existing.type === 'NUMERICAL' ? (unit !== undefined ? (unit ? String(unit) : null) : existing.unit) : null,
           targetValue: existing.type === 'NUMERICAL' && targetValue !== undefined ? parseFloat(targetValue) : existing.targetValue,
           aggregationType: existing.type === 'NUMERICAL' ? (aggregationType !== undefined ? (aggregationType ? String(aggregationType) : null) : existing.aggregationType) : null,
@@ -565,7 +573,7 @@ app.post('/api/habits/:id/log', requireAuth, async (req: AuthRequest, res: Respo
       });
     }
 
-    // Recalculate Streaks for this habit taking habit frequency into account
+    // Recalculate Streaks for this habit taking habit frequency and startDate into account
     const allCompletedLogs = await prisma.habitLog.findMany({
       where: {
         habitId: id,
@@ -580,7 +588,8 @@ app.post('/api/habits/:id/log', requireAuth, async (req: AuthRequest, res: Respo
       completedDates,
       String(date),
       habit.frequencyType,
-      habit.frequencyDays
+      habit.frequencyDays,
+      habit.startDate
     );
 
     // Update habit model with new streaks
@@ -656,7 +665,8 @@ app.delete('/api/habits/:id/log', requireAuth, async (req: AuthRequest, res: Res
       completedDates,
       String(date),
       habit.frequencyType,
-      habit.frequencyDays
+      habit.frequencyDays,
+      habit.startDate
     );
 
     const updatedHabit = await prisma.habit.update({
@@ -983,13 +993,15 @@ app.get('/api/daily-plan', requireAuth, async (req: AuthRequest, res: Response):
     // Filter habits scheduled for this targetDate (or already logged for this day)
     const scheduledHabits = habits
       .filter((habit) => {
-        const isScheduled = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays);
+        const habitStart = habit.startDate || habit.createdAt.toISOString().slice(0, 10);
+        const isScheduled = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays, habitStart);
         const hasLog = habit.logs.length > 0;
         return isScheduled || hasLog;
       })
       .map((habit) => {
         const todayLog = habit.logs[0] || null;
-        const isScheduled = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays);
+        const habitStart = habit.startDate || habit.createdAt.toISOString().slice(0, 10);
+        const isScheduled = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays, habitStart);
         return {
           id: habit.id,
           title: habit.title,
@@ -1001,6 +1013,7 @@ app.get('/api/daily-plan', requireAuth, async (req: AuthRequest, res: Response):
           unit: habit.unit,
           targetValue: habit.targetValue,
           aggregationType: habit.aggregationType,
+          startDate: habitStart,
           frequencyType: habit.frequencyType,
           frequencyDays: habit.frequencyDays,
           frequencyTarget: habit.frequencyTarget,
@@ -1142,7 +1155,8 @@ app.get('/api/daily-plan/week-stats', requireAuth, async (req: AuthRequest, res:
       let habitsCompleted = 0;
 
       for (const habit of habits) {
-        const isScheduled = isDateScheduled(dateStr, habit.frequencyType, habit.frequencyDays);
+        const habitStart = habit.startDate || habit.createdAt.toISOString().slice(0, 10);
+        const isScheduled = isDateScheduled(dateStr, habit.frequencyType, habit.frequencyDays, habitStart);
         const log = habit.logs.find((l) => l.date === dateStr);
         if (isScheduled || log) {
           habitsScheduled++;
@@ -1201,7 +1215,12 @@ app.get('/api/reminders/today', requireAuth, async (req: AuthRequest, res: Respo
     });
 
     const activeHabitReminders = habits
-      .filter((h) => isDateScheduled(targetDate, h.frequencyType, h.frequencyDays))
+      .filter((habit) => {
+        const habitStart = habit.startDate || habit.createdAt.toISOString().slice(0, 10);
+        const isScheduled = isDateScheduled(targetDate, habit.frequencyType, habit.frequencyDays, habitStart);
+        const hasLog = habit.logs.length > 0;
+        return isScheduled && !hasLog;
+      })
       .map((h) => ({
         id: `habit-${h.id}`,
         sourceId: h.id,

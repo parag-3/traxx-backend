@@ -47,6 +47,7 @@ model Habit {
   statusOptions   HabitStatusOption[]
   
   // Frequency & Schedule Configuration
+  startDate       String               @default("2026-08-01") // Mandatory YYYY-MM-DD start date
   frequencyType   String               @default("DAILY") // "DAILY", "WEEKDAYS", "WEEKENDS", "CUSTOM_DAYS", "TIMES_PER_WEEK"
   frequencyDays   String?              // e.g. "MON,TUE,WED,THU,FRI"
   frequencyTarget Int?                 // e.g. 3 for 3x per week
