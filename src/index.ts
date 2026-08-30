@@ -795,6 +795,8 @@ app.get('/api/habits/:id/stats', requireAuth, async (req: AuthRequest, res: Resp
     const completionRate = totalLogs > 0 ? Math.round((completedLogs.length / totalLogs) * 100) : 0;
 
     let numericalStats = null;
+    let timeStats = null;
+
     if (habit.type === 'NUMERICAL') {
       const validNumbers = habit.logs
         .map((l) => l.numericValue)
@@ -808,9 +810,38 @@ app.get('/api/habits/:id/stats', requireAuth, async (req: AuthRequest, res: Resp
         totalSum: sum,
         dailyAverage: avg,
         maxValue: max,
-        unit: habit.unit,
+        unit: habit.unit || 'units',
         targetValue: habit.targetValue,
         aggregationType: habit.aggregationType,
+        dailyTimeline: habit.logs.map((l) => ({
+          date: l.date,
+          value: l.numericValue !== null && l.numericValue !== undefined ? l.numericValue : 0,
+          isCompleted: l.isCompleted,
+          target: habit.targetValue || 0,
+        })),
+      };
+    } else if (habit.type === 'TIME') {
+      const validMinutes = habit.logs
+        .map((l) => l.numericValue)
+        .filter((v): v is number => v !== null && v !== undefined);
+
+      const sumMinutes = validMinutes.reduce((acc: number, curr: number) => acc + curr, 0);
+      const avgMinutes = validMinutes.length > 0 ? Number((sumMinutes / validMinutes.length).toFixed(1)) : 0;
+      const maxMinutes = validMinutes.length > 0 ? Math.max(...validMinutes) : 0;
+      const targetMin = habit.targetValue || 0;
+
+      timeStats = {
+        totalMinutes: sumMinutes,
+        totalHours: Number((sumMinutes / 60).toFixed(1)),
+        dailyAverageMinutes: avgMinutes,
+        maxMinutes,
+        targetMinutes: targetMin,
+        dailyTimeline: habit.logs.map((l) => ({
+          date: l.date,
+          value: l.numericValue !== null && l.numericValue !== undefined ? l.numericValue : 0,
+          isCompleted: l.isCompleted,
+          target: targetMin,
+        })),
       };
     }
 
@@ -834,17 +865,128 @@ app.get('/api/habits/:id/stats', requireAuth, async (req: AuthRequest, res: Resp
       habitId: habit.id,
       title: habit.title,
       type: habit.type,
+      category: habit.category,
+      color: habit.color,
+      icon: habit.icon,
+      startDate: habit.startDate,
       currentStreak: habit.currentStreak,
       bestStreak: habit.bestStreak,
       totalLoggedDays: totalLogs,
       completedDays: completedLogs.length,
       completionRate: `${completionRate}%`,
       numericalStats,
+      timeStats,
       statusDistribution,
     });
   } catch (error) {
     console.error('[API] Habit Stats Error:', error);
     return res.status(500).json({ error: 'Failed to fetch habit stats' });
+  }
+});
+
+// Comprehensive Portfolio Analytics & Trends Overview
+app.get('/api/analytics/overview', requireAuth, async (req: AuthRequest, res: Response): Promise<any> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const habits = await prisma.habit.findMany({
+      where: { userId },
+      include: {
+        statusOptions: true,
+        logs: { orderBy: { date: 'asc' } },
+      },
+    });
+
+    let totalFocusMinutes = 0;
+    let totalNumericalLogsCount = 0;
+    let totalHabitsCompletedLogs = 0;
+    let totalHabitsLogs = 0;
+
+    const timeHabitsData = [];
+    const numericalHabitsData = [];
+
+    for (const habit of habits) {
+      const logs = habit.logs;
+      const completedCount = logs.filter((l) => l.isCompleted).length;
+      totalHabitsLogs += logs.length;
+      totalHabitsCompletedLogs += completedCount;
+
+      if (habit.type === 'TIME') {
+        const validMinutes = logs
+          .map((l) => l.numericValue)
+          .filter((v): v is number => v !== null && v !== undefined);
+        const habitMinutes = validMinutes.reduce((sum, v) => sum + v, 0);
+        totalFocusMinutes += habitMinutes;
+        const targetMin = habit.targetValue || 0;
+
+        timeHabitsData.push({
+          id: habit.id,
+          title: habit.title,
+          category: habit.category,
+          color: habit.color,
+          icon: habit.icon,
+          startDate: habit.startDate,
+          currentStreak: habit.currentStreak,
+          bestStreak: habit.bestStreak,
+          totalMinutes: habitMinutes,
+          totalHours: Number((habitMinutes / 60).toFixed(1)),
+          dailyAverageMinutes: logs.length > 0 ? Number((habitMinutes / logs.length).toFixed(1)) : 0,
+          targetMinutes: targetMin,
+          completionRate: logs.length > 0 ? Math.round((completedCount / logs.length) * 100) : 0,
+          timeline: logs.map((l) => ({
+            date: l.date,
+            value: l.numericValue !== null && l.numericValue !== undefined ? l.numericValue : 0,
+            isCompleted: l.isCompleted,
+            target: targetMin,
+          })),
+        });
+      } else if (habit.type === 'NUMERICAL') {
+        const validValues = logs
+          .map((l) => l.numericValue)
+          .filter((v): v is number => v !== null && v !== undefined);
+        const sumValues = validValues.reduce((sum, v) => sum + v, 0);
+        totalNumericalLogsCount += sumValues;
+
+        numericalHabitsData.push({
+          id: habit.id,
+          title: habit.title,
+          category: habit.category,
+          color: habit.color,
+          icon: habit.icon,
+          unit: habit.unit || 'units',
+          startDate: habit.startDate,
+          currentStreak: habit.currentStreak,
+          bestStreak: habit.bestStreak,
+          totalSum: sumValues,
+          dailyAverage: logs.length > 0 ? Number((sumValues / logs.length).toFixed(1)) : 0,
+          maxValue: validValues.length > 0 ? Math.max(...validValues) : 0,
+          targetValue: habit.targetValue || 0,
+          completionRate: logs.length > 0 ? Math.round((completedCount / logs.length) * 100) : 0,
+          timeline: logs.map((l) => ({
+            date: l.date,
+            value: l.numericValue !== null && l.numericValue !== undefined ? l.numericValue : 0,
+            isCompleted: l.isCompleted,
+            target: habit.targetValue || 0,
+          })),
+        });
+      }
+    }
+
+    return res.status(200).json({
+      summary: {
+        totalHabits: habits.length,
+        totalFocusMinutes,
+        totalFocusHours: Number((totalFocusMinutes / 60).toFixed(1)),
+        totalNumericalLogsCount,
+        overallCompletionRate: totalHabitsLogs > 0 ? Math.round((totalHabitsCompletedLogs / totalHabitsLogs) * 100) : 0,
+      },
+      timeHabits: timeHabitsData,
+      numericalHabits: numericalHabitsData,
+    });
+  } catch (error) {
+    console.error('[API] Analytics Overview Error:', error);
+    return res.status(500).json({ error: 'Failed to fetch analytics overview' });
   }
 });
 
